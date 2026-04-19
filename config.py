@@ -35,7 +35,7 @@ import pandas as pd
 
 
 # ── Directory layout ──────────────────────────────────────────
-DATA_ROOT      = "data"
+DATA_ROOT      = "/content/drive/MyDrive/skin_data"
 CHECKPOINT_DIR = "checkpoints"
 RESULTS_DIR    = "results"
 
@@ -44,12 +44,12 @@ PAD_IMG_DIR = os.path.join(DATA_ROOT, "PAD-UFES-20", "images")
 PAD_CSV     = os.path.join(DATA_ROOT, "PAD-UFES-20", "metadata.csv")
 
 # PAD-UFES-20 column names (adjust if your CSV differs)
-PAD_LABEL_COL    = "dx"
-PAD_IMG_ID_COL   = "img_id"
+PAD_LABEL_COL    = "target"
+PAD_IMG_ID_COL   = "image_id"
 PAD_AGE_COL      = "age"
-PAD_SEX_COL      = "gender"
-PAD_REGION_COL   = "region"
-PAD_SKINTYPE_COL = "fitspatrick"   # Fitzpatrick scale column
+PAD_SEX_COL      = "sex"
+PAD_REGION_COL   = "localization"
+PAD_SKINTYPE_COL = "skin_type"   # Fitzpatrick scale column
 
 # Which PAD dx values are malignant → label=1 in binary task
 # PAD-UFES-20 dx values: MEL, BCC, SCC, ACK, NEV, SEK
@@ -60,12 +60,12 @@ DERM_IMG_DIR = os.path.join(DATA_ROOT, "Dermaco-In", "images")
 DERM_CSV     = os.path.join(DATA_ROOT, "Dermaco-In", "metadata.csv")
 
 # Dermaco-In column names (adjust if your CSV differs)
-DERM_LABEL_COL    = "dx"
-DERM_IMG_ID_COL   = "image_id"    # change to "img_id" if needed
-DERM_AGE_COL      = "age"
-DERM_SEX_COL      = "sex"
-DERM_REGION_COL   = "localization"
-DERM_SKINTYPE_COL = "skin_type"   # set None if column absent
+DERM_LABEL_COL    = "Disease_Group"
+DERM_IMG_ID_COL   = "Image_name"    # change to "img_id" if needed
+DERM_AGE_COL      = "age_group"
+DERM_SEX_COL      = "Sex"
+DERM_REGION_COL   = "body_region"
+DERM_SKINTYPE_COL = None   # set None if column absent
 
 # ── PAD dynamic class globals (populated at runtime) ──────────
 PAD_DISEASE_CLASSES: list[str] = []    # ["non_cancer", "cancer"] for binary
@@ -163,8 +163,8 @@ UNFREEZE_EVERY        = 25          # unfreeze one more group every N epochs
 UNFREEZE_MAX_GROUPS   = 4           # stop at layer1 (don't touch stem)
 
 # ── Shared training settings ──────────────────────────────────
-BATCH_SIZE   = 32
-NUM_WORKERS  = 4
+BATCH_SIZE   = 64
+NUM_WORKERS  = 2
 SEED         = 42
 
 # ── Advanced features ─────────────────────────────────────────
