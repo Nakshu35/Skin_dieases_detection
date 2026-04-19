@@ -313,21 +313,32 @@ class DermacoDataset(_BaseDataset):
                             str(row[config.DERM_IMG_ID_COL]))
 
     def _get_label_and_meta(self, row):
-        dx    = str(row[config.DERM_LABEL_COL]).strip()
-        label = config.DERM_CLASS_TO_IDX.get(dx, 0)   # 0 fallback; log if hit
+      # ===== LABEL (string → index) =====
+      dx = str(row[config.DERM_LABEL_COL]).strip()
+      label = config.DERM_CLASS_TO_IDX[dx]
 
-        age    = _normalize_age(row.get(config.DERM_AGE_COL, np.nan))
-        sex    = _encode_sex(row.get(config.DERM_SEX_COL, np.nan))
-        region = _encode_region(row.get(config.DERM_REGION_COL, np.nan),
-                                REGION_VOCAB)
-        # skin_type column may not exist in Dermaco-In
-        if config.DERM_SKINTYPE_COL and config.DERM_SKINTYPE_COL in row.index:
-            skin = _encode_skin_type(row[config.DERM_SKINTYPE_COL])
-        else:
-            skin = -1.0   # impute as missing
+      # ===== METADATA ENCODING =====
 
-        meta = torch.tensor([age, sex, region, skin], dtype=torch.float32)
-        return meta, label
+      # AGE GROUP (convert to numeric)
+      age_map = {
+          "0-10": 0.05, "11-20": 0.15, "21-30": 0.25,
+          "31-40": 0.35, "41-50": 0.45, "51-60": 0.55,
+          "61-70": 0.65, "71-80": 0.75, "81-90": 0.85
+      }
+      age_val = age_map.get(str(row[config.DERM_AGE_COL]), 0.5)
+
+      # SEX
+      sex = _encode_sex(row.get(config.DERM_SEX_COL))
+
+      # REGION
+      region = _encode_region(row.get(config.DERM_REGION_COL), REGION_VOCAB)
+
+      # NO skin_type → set -1
+      skin = -1.0
+
+      meta = torch.tensor([age_val, sex, region, skin], dtype=torch.float32)
+
+      return meta, label
 
 
 # =============================================================
