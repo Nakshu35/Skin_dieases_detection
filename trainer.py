@@ -333,8 +333,20 @@ def run_stage(
 
     # ── Loss ──────────────────────────────────────────────────
     alpha     = class_weights.to(device) if class_weights is not None else None
-    criterion = FocalLoss(gamma=gamma, alpha=alpha,
-                          label_smoothing=smooth, num_classes=num_classes)
+    if stage == "stage1":
+        # 🔥 FIX: use CrossEntropy for PAD (binary)
+        criterion = torch.nn.CrossEntropyLoss(weight=class_weights.to(device) if class_weights is not None else None)
+
+    else:
+        # Keep FocalLoss for Dermaco (multi-class)
+        alpha = class_weights.to(device) if class_weights is not None else None
+
+        criterion = FocalLoss(
+            gamma=gamma,                     # 2.0 for Dermaco
+            alpha=alpha,
+            label_smoothing=smooth,
+            num_classes=num_classes
+        )
 
     # ── Optimizer ─────────────────────────────────────────────
     if stage == "stage1":
