@@ -270,8 +270,7 @@ class PADDataset(_BaseDataset):
 
     def _get_label_and_meta(self, row):
         # Binary label
-        dx    = str(row[config.PAD_LABEL_COL]).strip()
-        label = 1 if dx in config.PAD_CANCER_LABELS else 0
+        label = int(row[config.PAD_LABEL_COL])
 
         # Metadata
         age    = _normalize_age(row.get(config.PAD_AGE_COL, np.nan))
@@ -357,21 +356,22 @@ def make_pad_splits() -> tuple[pd.DataFrame, pd.DataFrame]:
     has the same cancer prevalence as the full dataset.
     """
     df = pd.read_csv(config.PAD_CSV)
-    _check_columns(df, [config.PAD_LABEL_COL, config.PAD_IMG_ID_COL],
-                   dataset="PAD-UFES-20")
-
-    # Binary stratification label
-    bin_labels = (df[config.PAD_LABEL_COL]
-                  .apply(lambda dx: 1 if dx in config.PAD_CANCER_LABELS else 0))
-
-    # 70% train, 30% val (no test — Stage 1 is a pretraining step)
-    train_df, val_df = train_test_split(
+    train_df, temp_df = train_test_split(
         df,
-        test_size    = 1.0 - config.TRAIN_RATIO - config.TEST_RATIO,
-        random_state = config.SEED,
-        stratify     = bin_labels,
+        test_size=0.3,
+        stratify=df[config.PAD_LABEL_COL],   # 🔥 CRITICAL
+        random_state=42
     )
-    print(f"[PAD splits]  Train: {len(train_df)} | Val: {len(val_df)}")
+
+
+    # Second split: Val (20%) + Test (10%)
+    val_df, test_df = train_test_split(
+        temp_df,
+        test_size=0.33,
+        stratify=temp_df[config.PAD_LABEL_COL],  # 🔥 CRITICAL
+        random_state=42
+    )
+    
     return train_df.reset_index(drop=True), val_df.reset_index(drop=True)
 
 
