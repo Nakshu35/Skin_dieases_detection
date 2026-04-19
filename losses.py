@@ -1,115 +1,77 @@
 # =============================================================
-# losses.py  —  Focal Loss for imbalanced datasets
+# losses.py  —  Focal Loss with label smoothing
 # =============================================================
 #
-# WHY Focal Loss?
-#   Skin disease datasets are heavily imbalanced.
-#   Example: "nevus" might have 5000 samples, "melanoma" only 200.
-#   Standard CrossEntropy treats all samples equally → model gets
-#   lazy and just predicts the majority class.
-#
-#   Focal Loss adds a factor (1 - p_t)^gamma that:
-#     • Down-weights easy examples (model already confident)
-#     • Up-weights hard examples (model uncertain/wrong)
-#   This forces the model to focus on rare, hard classes.
-#
-# Formula:
-#   FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)
-#
-#   gamma = 2.0  (standard value from original paper)
-#   alpha = per-class weight (optional, for extra balancing)
+# Identical in structure to the previous version but:
+#   1. gamma is now a constructor argument (not pulled from config)
+#      so Stage 1 (PAD_FOCAL_GAMMA=2.5) and Stage 2 (DERM_FOCAL_GAMMA=2.0)
+#      can use different focus intensities without a global change.
+#   2. label_smoothing applies only in Stage 2 (passed as 0.0 for Stage 1).
+#   3. num_classes is required when label_smoothing > 0.
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-
-import config
 
 
 class FocalLoss(nn.Module):
     """
-    Multi-class Focal Loss.
+    Multi-class Focal Loss with optional label smoothing.
 
     Parameters
     ----------
-    gamma : float  — focusing parameter. Higher = more focus on hard examples.
-                     0 = standard CrossEntropy. Default 2.0.
-    alpha : list or None  — per-class weights. Length must equal NUM_CLASSES.
-                            Set None to treat all classes equally.
-    reduction : str  — 'mean' (default) or 'sum'
+    gamma           : focusing parameter. Higher → more weight on hard examples.
+                      Stage 1 (PAD): use 2.5 for stronger imbalance focus.
+                      Stage 2 (Dermaco): use 2.0 (label smoothing compensates).
+    alpha           : per-class weight tensor (CPU) | None
+    label_smoothing : 0.0 = hard labels. 0.1 = standard smoothing.
+    num_classes     : required when label_smoothing > 0.
+    reduction       : 'mean' | 'sum' | 'none'
     """
 
-    def __init__(self, gamma=config.FOCAL_GAMMA,
-                 alpha=config.FOCAL_ALPHA,
-                 reduction="mean"):
+    def __init__(self, gamma: float = 2.0, alpha=None,
+                 label_smoothing: float = 0.0,
+                 num_classes: int = 2, reduction: str = "mean"):
         super().__init__()
-        self.gamma = gamma
-        self.reduction = reduction
+        self.gamma           = gamma
+        self.label_smoothing = label_smoothing
+        self.num_classes     = num_classes
+        self.reduction       = reduction
 
-        # If alpha is provided, register it as a buffer (moves to GPU automatically)
         if alpha is not None:
-            alpha_tensor = torch.tensor(alpha, dtype=torch.float32)
-            self.register_buffer("alpha", alpha_tensor)
+            if not isinstance(alpha, torch.Tensor):
+                alpha = torch.tensor(alpha, dtype=torch.float32)
+            self.register_buffer("alpha", alpha.float())
         else:
             self.alpha = None
 
-    def forward(self, logits, targets):
-        """
-        Parameters
-        ----------
-        logits  : Tensor (batch, num_classes)  — raw model output (before softmax)
-        targets : Tensor (batch,)              — ground truth class indices
-        """
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor):
+        log_probs = F.log_softmax(logits, dim=1)   # (B, C) numerically stable
 
-        # Step 1: Standard cross-entropy loss (per sample, no reduction yet)
-        # log_softmax is numerically more stable than log(softmax(x))
-        log_probs = F.log_softmax(logits, dim=1)          # (batch, num_classes)
-        ce_loss   = F.nll_loss(log_probs, targets,        # (batch,)
-                               weight=self.alpha,
-                               reduction="none")
+        if self.label_smoothing > 0.0:
+            C          = self.num_classes
+            smooth_val = self.label_smoothing / max(C - 1, 1)
+            one_hot    = torch.full((logits.size(0), C), smooth_val,
+                                    device=logits.device, dtype=logits.dtype)
+            one_hot.scatter_(1, targets.unsqueeze(1),
+                             1.0 - self.label_smoothing)
+            ce_loss = -(one_hot * log_probs).sum(dim=1)   # (B,)
+        else:
+            ce_loss = F.nll_loss(log_probs, targets,
+                                 weight=self.alpha, reduction="none")
 
-        # Step 2: Get the probability of the TRUE class for each sample
-        probs    = torch.exp(log_probs)                   # (batch, num_classes)
-        # gather picks the probability at the true class index
-        p_t = probs.gather(dim=1, index=targets.unsqueeze(1)).squeeze(1)  # (batch,)
+        # Focal modulation: down-weight easy examples
+        probs        = torch.exp(log_probs)
+        p_t          = probs.gather(1, targets.unsqueeze(1)).squeeze(1)
+        focal_weight = (1.0 - p_t) ** self.gamma
+        focal_loss   = focal_weight * ce_loss
 
-        # Step 3: Focal weight  =  (1 - p_t)^gamma
-        #   If p_t is high (easy sample) → weight ≈ 0  → loss contribution tiny
-        #   If p_t is low  (hard sample) → weight ≈ 1  → loss contribution full
-        focal_weight = (1.0 - p_t) ** self.gamma          # (batch,)
+        # Apply alpha in smooth path (not handled by nll_loss above)
+        if self.label_smoothing > 0.0 and self.alpha is not None:
+            focal_loss = self.alpha[targets] * focal_loss
 
-        # Step 4: Apply focal weight to CE loss
-        focal_loss = focal_weight * ce_loss                # (batch,)
-
-        # Step 5: Reduce
         if self.reduction == "mean":
             return focal_loss.mean()
-        elif self.reduction == "sum":
+        if self.reduction == "sum":
             return focal_loss.sum()
-        else:
-            return focal_loss   # no reduction — returns per-sample losses
-
-
-def compute_class_weights(dataset, num_classes=config.NUM_CLASSES):
-    """
-    Computes inverse-frequency class weights from a dataset.
-    Useful to pass as 'alpha' to FocalLoss for extra imbalance handling.
-
-    Returns a list of floats, one per class.
-    """
-    counts = np.zeros(num_classes)
-
-    for _, _, label in dataset:
-        counts[label] += 1
-
-    # Avoid division by zero
-    counts = np.where(counts == 0, 1, counts)
-
-    # Inverse frequency: rare classes get higher weight
-    weights = 1.0 / counts
-    weights = weights / weights.sum() * num_classes   # normalise so they sum to num_classes
-
-    print("[FocalLoss] Class weights:", {config.DISEASE_CLASSES[i]: round(weights[i], 4)
-                                          for i in range(num_classes)})
-    return weights.tolist()
+        return focal_loss
